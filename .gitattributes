@@ -1,0 +1,7 @@
+tools/assets/*.bat text eol=lf
+
+tools/assets/bin/** binary
+
+tools/assets/bin/*.sh text eol=lf
+tools/assets/bin/*.ps1 text
+tools/assets/bin/*.md text
