@@ -1,0 +1,178 @@
+name: Build & release setup kit
+
+on:
+  push:
+    tags: ['v*', '[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DISC_NAME: Out of this World (USA)
+  KIT_NAME: OOTW-Saturn
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with SaturnRingLib submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso wget unzip zip curl
+
+      - name: Cache SaturnRingLib toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            SaturnRingLib/Compiler
+            SaturnRingLib/tools/bin
+          key: srl-toolchain-gcc14.2.0-iso2raw0.2.2
+
+      - name: Fetch SH-2 toolchain + iso2raw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        working-directory: SaturnRingLib
+        run: |
+          set -e
+          bash tools/scripts/getcompiler.sh 14.2.0
+          bash tools/scripts/getiso2raw.sh v0.2.2
+
+      - name: Build engine-only Saturn disc (release)
+        working-directory: saturn
+        run: |
+          set -e
+          export SRL_INSTALL_ROOT=../SaturnRingLib
+          bash ../SaturnRingLib/tools/scripts/make.sh release ../SaturnRingLib/Compiler
+          ls -la BuildDrop
+
+      - name: Assert the disc carries no game data
+        run: |
+          set -e
+          if ls saturn/cd/data/bank* saturn/cd/data/BANK* saturn/cd/data/memlist.bin 2>/dev/null | grep -q .; then
+            echo "ERROR: game data present in the CD skeleton -- refusing to package"; exit 1
+          fi
+          xorriso -indev "saturn/BuildDrop/${DISC_NAME}.iso" -find / 2>/dev/null | tee /tmp/base-listing
+          if grep -qi 'BANK' /tmp/base-listing; then
+            echo "ERROR: bank files inside the base ISO"; exit 1
+          fi
+          grep -q '0.BIN' /tmp/base-listing || { echo "ERROR: 0.BIN missing -- disc would not boot"; exit 1; }
+
+      - name: Stage program files
+        id: program
+        run: |
+          set -e
+          PROG="$RUNNER_TEMP/program"
+          mkdir -p "$PROG"
+          cp saturn/cd/data/0.bin "$PROG/0.bin"
+          (cd "$PROG" && sha256sum 0.bin > SHA256SUMS)
+          cat "$PROG/SHA256SUMS"
+          echo "dir=$PROG" >> "$GITHUB_OUTPUT"
+
+      - name: Stage setup kit
+        id: kit
+        run: |
+          set -e
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
+
+          STAGE="$RUNNER_TEMP/kit-stage"
+          mkdir -p "$STAGE"
+
+          cp -r tools/assets/bin "$STAGE/"
+          cp "saturn/BuildDrop/${DISC_NAME}.iso" "$STAGE/bin/${DISC_NAME}.iso"
+          cp tools/assets/run-me.bat "$STAGE/"
+          cp tools/assets/README-kit.md "$STAGE/README.md"
+
+          SRC="$STAGE/(put bank and memlist files here)"
+          mkdir -p "$SRC"
+          {
+            echo "Put the Out of this World PC DOS data files here."
+            echo ""
+            echo "Fourteen of them, and nothing else from that release is used:"
+            echo "  bank01 bank02 bank03 bank04 bank05 bank06 bank07"
+            echo "  bank08 bank09 bank0a bank0b bank0c bank0d memlist.bin"
+            echo ""
+            echo "Upper or lower case, loose or still in a .zip."
+          } > "$SRC/READ ME.txt"
+
+          if grep -rIlE 'https?://' "$STAGE" | grep -v 'bin/LICENSE-xorriso.txt' | grep -q .; then
+            echo "ERROR: a URL survived into the kit -- refusing to package"
+            grep -rIlE 'https?://' "$STAGE" | grep -v 'bin/LICENSE-xorriso.txt'
+            exit 1
+          fi
+
+          chmod +x "$STAGE"/*.bat "$STAGE"/bin/lin/iso2raw "$STAGE"/bin/mac/*/iso2raw
+
+          echo "ver=$VER"       >> "$GITHUB_OUTPUT"
+          echo "stage_dir=$STAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test the kit
+        run: |
+          set -e
+          TEST="$RUNNER_TEMP/kit-test"
+          cp -r "${{ steps.kit.outputs.stage_dir }}" "$TEST"
+
+          SRC="$TEST/(put bank and memlist files here)"
+          mkdir -p "$SRC"
+          for n in 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D; do echo "placeholder $n" > "$SRC/BANK$n"; done
+          echo "placeholder" > "$SRC/MEMLIST.BIN"
+          (cd "$TEST" && bash run-me.bat)
+          out="$TEST/${DISC_NAME}"
+          test -s "$out/${DISC_NAME}.bin"
+          grep -q "FILE \"${DISC_NAME}.bin\" BINARY" "$out/${DISC_NAME}.cue"
+
+          perl -e 'binmode STDIN; binmode STDOUT; while (read(STDIN,$s,2352)==2352) { print substr($s,16,2048) }' \
+            < "$out/${DISC_NAME}.bin" > /tmp/deraw.iso
+          xorriso -indev /tmp/deraw.iso -find / 2>/dev/null | tee /tmp/full-listing
+          for f in BANK01 BANK0D MEMLIST.BIN 0.BIN; do
+            grep -q "'/$f'" /tmp/full-listing || { echo "ERROR: /$f missing from the built disc"; exit 1; }
+          done
+
+          cmp -n 32768 "saturn/BuildDrop/${DISC_NAME}.iso" /tmp/deraw.iso
+          echo "Kit smoke test passed."
+
+      - name: Package setup kit
+        id: package
+        run: |
+          set -e
+          NAME="${KIT_NAME}-${{ steps.kit.outputs.ver }}"
+
+          (cd "${{ steps.kit.outputs.stage_dir }}" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
+          echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"
+          echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload kit as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.kit.outputs.stage_dir }}
+
+      - name: Upload program files as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DISC_NAME }} - Program Files (${{ steps.kit.outputs.ver }})
+          path: ${{ steps.program.outputs.dir }}
+
+      - name: Attach to GitHub release (tag runs)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            printf '%s\n' \
+              "" \
+              " See README.md in the zip." > /tmp/notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+          fi
+          gh release upload "$TAG" "${{ steps.package.outputs.zip_path }}" --clobber
+
+          gh release upload "$TAG" \
+            "${{ steps.program.outputs.dir }}/0.bin" \
+            "${{ steps.program.outputs.dir }}/SHA256SUMS" --clobber
