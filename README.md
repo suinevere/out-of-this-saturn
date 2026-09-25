@@ -1,67 +1,74 @@
-NEO-RAW:
-====
+# Out of this World for Sega Saturn
 
-This is an Another World VM implementation.  Based on Gregory Montoir's original work, the codebase has been cleaned up with legibility and readability in mind.
+A Sega Saturn port of Eric Chahi's *Out of this World*, based on Gregory Montoir's re-implementation and Fabien Sanglard's `raw` rewrite.
 
-Architecture:
-=============
+It builds as a standalone disc, and also ships as Part I of [heart-of-the-saturn](https://github.com/suinevere/heart-of-the-saturn).
 
-http://fabiensanglard.net/anotherWorld_code_review/index.php
-http://fabiensanglard.net/another_world_polygons/index.html
-http://fabiensanglard.net/another_world_polygons_PC_DOS/index.html
+## Playing
 
-Fabien Sanglard
+Download the setup kit from [Releases](https://github.com/suinevere/out-of-this-saturn/releases), unzip it, put your PC DOS data files in the data folder, and run `run-me.bat`.
 
+The release also includes `0.bin`, the program linked at `0x06004000`, for embedding on another disc.
 
-About:
-------
+## Game data
 
-raw is a re-implementation of the engine used in the game Another World. This 
-game, released under the name Out Of This World in non-European countries, was 
-written by Eric Chahi at the beginning of the '90s. More information can be 
-found on [MobyGames](https://www.mobygames.com/game/564/out-of-this-world/).
+No game data is included. You need the English PC DOS release: `bank01` through `bank0d` and `memlist.bin`.
 
-Supported Versions:
--------------------
+## Requirements
 
-English PC DOS version is supported ("Out of this World").
+- Git with SSH access to GitHub
+- A POSIX shell or `cmd.exe`
+- A host `g++` with C++11, for the tests
 
-Compiling:
-----------
+## Setup
+
+```sh
+git clone --recurse-submodules git@github.com:suinevere/out-of-this-saturn.git
+cd out-of-this-saturn
+
+cd SaturnRingLib && ./setup_compiler.bat && cd ..
+cd tools/assets && ./data.bat /path/to/dos-files && cd ../..
 ```
-cmake .
-make
+
+`setup_compiler.bat` installs the SH-2 toolchain into `SaturnRingLib/Compiler`. `data.bat` installs the game data into `saturn/cd/data` from a folder, a `.zip` or a URL to a `.zip`; without it the build boots to a resource panic.
+
+## Build
+
+```sh
+cd saturn
+./compile.bat             # debug
+./compile.bat release
+./compile.bat clean
 ```
-Running:
---------
 
-You will need the original files, here is the required list :
-- BANK*
-- MEMLIST.BIN
-	
-To start the game, you can either :
-- put the game's datafiles in the same directory as the executable
-- use the --datapath command line option to specify the datafiles directory
+Output goes to `saturn/BuildDrop`. Point an emulator at the `.cue`.
 
-Here are the various in game hotkeys :
--   Arrow Keys      allow you to move Lester
--   Enter/Space     allow you run/shoot with your gun
--   C               allow to enter a code to jump at a specific level
--   P               pause the game
--   Alt X           exit the game
--   Ctrl S          save game state
--   Ctrl L          load game state
--   Ctrl + and -    change game state slot
--   Ctrl F          toggle fast mode
--   TAB             change window scale factor
+When building from heart-of-the-saturn, `compile.bat` honours `SRL_INSTALL_ROOT` and `SRL_COMPILER_DIR` if set.
 
-Credits:
---------
+## Tests
 
-Eric Chahi, obviously, for making this great game.
+```sh
+cd saturn/tests
+./run_tests.sh
+```
 
-Contact:
---------
+A compile error aborts the script, so check for the `all suites passed` line rather than grepping for `FAIL`.
 
-Gregory Montoir, cyx@users.sourceforge.net
-Fabien Sanglard, fabiensanglard.net@gmail.com
+## Layout
+
+```
+saturn/src/       main.cxx and the engine, video, sound, menus, input, save, ports and system code
+saturn/tests/     Host unit tests
+saturn/cd/        Disc skeleton
+saturn/BuildDrop/ Build output
+SaturnRingLib/    SDK submodule and toolchain
+tools/            Asset and analysis scripts
+```
+
+## License
+
+GPL-2.0-or-later. See [LICENSE.md](LICENSE.md).
+
+## Credits
+
+Eric Chahi made the game. Gregory Montoir wrote the original re-implementation and Fabien Sanglard the rewrite this port started from. The port is built on ReyeMe's [SaturnRingLib](https://github.com/ReyeMe/SaturnRingLib).
